@@ -1,8 +1,7 @@
 
-
 # Qxern — latent semantic channel + symbolic AST sidecar for inter-LLM code communication
 
-> **One honest sentence:** Continuous latents are a fast *semantic* channel between two LLMs, but they are structurally unable to carry *exact symbols*; independent probing confirms that identifier signals exist in the latent space but are too weak to overcome receiver priors without a deterministic AST sidecar. Every claim below is locked behind guard gates, paired bootstrap CIs, and external replication attempts.
+> **One honest sentence:** Continuous latents are a fast *semantic* channel between two LLMs, but for this model pair they are not a symbol channel: identifier edits occupy a weak direction in the packet (linear probe: 44.8% vs 12.5% chance; candidate-free logit lift +0.02..+0.05), yet the receiver's pretrained lexical priors dominate at generation time — open-vocabulary recovery is 0/96. The AST sidecar is **operationally necessary for this model pair**; architectural necessity is not established. Every claim below is locked behind guard gates, paired bootstrap CIs, and external replication attempts.
 
 **English (this file) · [Русская версия → README.ru.md](README.ru.md)**
 
@@ -29,7 +28,7 @@ I'm **15 years old, from Russia**.
 
 Models think in continuous vectors; text is a lossy, token-by-token serialization imposed on them for *our* convenience. When two models talk in text, the sender pays generation latency, and rich internal semantics get flattened into a string the receiver must re-encode. If models could exchange *meaning* directly, multi-model pipelines — agent swarms, code-review bots, model cascades — would get faster and cheaper.
 
-But measurements (both internal and external) show exactly where the dream breaks: a continuous latent channel trained by distillation carries **behavioral semantics** well and **discrete symbols** not at all. Qxern v6 is the pragmatic answer: **meaning through latents, symbols through a deterministic symbolic channel, text only as a rare fallback.** Don't fight the geometry — route around it.
+But measurements (both internal and external) show exactly where the dream breaks: a continuous latent channel trained by distillation carries **behavioral semantics** well, and **discrete symbols only as a weak, generation-irrecoverable signal** (see the evidence ladder below). Qxern v6 is the pragmatic answer: **meaning through latents, symbols through a deterministic symbolic channel, text only as a rare fallback.** Don't fight the geometry — route around it.
 
 ## What is this?
 
@@ -40,7 +39,7 @@ The project went through an honest arc:
 - **v4 claim:** “latents are better and faster than text” — **did not survive** a properly strengthened text relay baseline.
 - **v5 finding:** pure latents win on speed (**6.0×**) and binary behavioral facts (`returns` 0.90), but **completely lose exact symbols** (function names 0.00 vs 0.70 for relay, param count 0.13 vs 0.63). Channel width is irrelevant: the 8→64-token capacity curve is flat.
 - **v6 (this repo):** don't force a continuous channel to be a lossless codec. The packet becomes `[semantic latents] + [deterministic AST sidecar]` (signature / arity / behavioral flags / literals — parsed with `ast`, no LLM, microseconds, ~30 tokens). An **adaptive router** picks latent-only / latent+sidecar / relay per question type.
-- **v6 Independent Audit (John6666):** Confirmed that the sidecar does the heavy lifting for exact facts. Crucially, refined the understanding of symbol loss: identifier information *is* present in the latent packet and weakly affects the receiver's probability distribution, but it is too uneven to overcome lexical priors. Pure-latent open-vocabulary identifier recovery remains at 0/96. This validates the hybrid approach as an architectural necessity, not just a performance hack.
+- **v6 Independent Audit (John6666):** Confirmed that the sidecar does the heavy lifting for exact facts. Crucially, refined the understanding of symbol loss: identifier information *is* present in the latent packet (decodable) and weakly affects the receiver's probability distribution, but it is too uneven to overcome lexical priors at generation time. Pure-latent open-vocabulary identifier recovery remains at 0/96. This validates the hybrid approach as an **operational necessity for this model pair** — architectural necessity is not established. Public notebooks and reproducibility notes: [`independent_audit/`](independent_audit/README.md).
 
 ## Key results (measured, from the raw run data)
 
@@ -56,7 +55,11 @@ All numbers are computed from [`results/qxern_v6_results.json`](results/qxern_v6
 | **hybrid_struct** (both) | **0.87** | 0.73 | **0.90** | 0.42 | 420 | 122 |
 | oracle (code as text) | 1.00 | 0.90 | 0.93 | 0.50 | 736 | 170 |
 
+**Why `hybrid` (0.93) beats the oracle (0.90) on param count:** the sidecar states the number *explicitly* in the prompt ("parameters: 2"), and the decoder just copies it; the oracle must count the parameters itself from the full code text. The metric measures **copying from the prompt** more than reasoning — which is exactly the sidecar's job: it turns a reasoning task into a copy task. This is a property of the metric, not evidence that the hybrid "understands" better.
+
 **Guard gates: PASSED for both hybrids.** The self-imposed “don't make anything worse” gates (`returns ≥ 0.88`, SemSim drop vs pure latents ≤ 0.01, `names ≥ 0.65`, `params ≥ 0.60`, speedup vs relay ≥ 2×) pass for `hybrid` and `hybrid_struct`, and **fail for `qxern_struct`** (names 0.20 < 0.65). That failure is the point of the ablation: **retraining alone does not restore exact symbols — the sidecar does.**
+
+> **Ablation caveat (leakage in the struct branch's favor):** `qxern_struct` was trained on the *same question formulations* used in this eval (e.g. "What is the name of this function?" and "How many parameters does this function take, and what are they?" appear both in the struct training targets, section 14, and in `AST_TASKS`, section 8). The 0.20 cap therefore holds **despite** leakage that should only help it — a conservative estimate of how little retraining alone buys.
 
 **Paired bootstrap vs relay** (10,000 resamples, 95% CI):
 
@@ -65,15 +68,35 @@ All numbers are computed from [`results/qxern_v6_results.json`](results/qxern_v6
 
 ### 🔬 Independent Replication & Refined Geometry (John6666 Audit)
 
-An independent follow-up using the released v6 adapter (12 Python functions, seed 42, Colab T4) validated and refined the core claims:
+An independent follow-up using the released v6 adapter (12 Python functions, seed 42, Colab T4) validated and refined the core claims. All three public Colab notebooks, the pinned model/adapter/dataset revisions and the result-bundle checksums are preserved verbatim in [`independent_audit/`](independent_audit/README.md) (executed T4 snapshot bundle SHA-256 `2fefa1e006f4644edf598aea26c72a0dfdf1420450f060c461686c220ddc88f9`):
 
 1.  **Exact recovery is sidecar-driven:** Replacing the latent while keeping the correct sidecar preserved 11-12/12 function names. Replacing the sidecar while keeping the correct latent dropped names to 0/12. Pure-latent name generation remained at 0/96.
 2.  **Latents carry coarse sample-specific semantics:** Correct latent vs. wrong-example latent showed a significant semantic similarity gap (+0.261, 95% CI [+0.168, +0.382]). The packet is not a generic soft prompt.
-3.  **Identifier signal exists but is weak:** Cosine similarity between original and renamed packets is high (0.987), yet candidate-free likelihood tests show the receiver's distribution *does* shift positively when the encoded identifier changes (+0.0519 self-score lift, p<0.002). However, raw top-1 accuracy is chance-like (13.5% vs 12.5%), and open-vocab generation fails. **Conclusion:** Identifier information occupies a small direction in latent space that is decodable but insufficient to overcome pretrained lexical priors.
+3.  **Identifier signal exists but is weak:** Cosine similarity between original and renamed packets is high (0.987), and a linear probe on the packet recovers the identifier at **44.8% vs 12.5% chance**. Candidate-free likelihood tests show the receiver's distribution *does* shift positively when the encoded identifier changes (self-score lift **+0.02..+0.05** across prompt types: 0.024 for the exact-identifier prompt, 0.052 for the recover-name prompt). However, raw top-1 accuracy stays chance-like (13.5% vs 12.5%), and open-vocabulary generation fails (0/96). **Conclusion:** Identifier edits occupy a weak, decodable direction in the packet that is insufficient to overcome pretrained lexical priors at generation time.
 4.  **Fine-grained behavior edits are directional but unreliable:** Packet swaps for localized behavior changes (> vs >=, asc vs desc) produce positive mean shifts in the correct direction, but no pair passed the robust discrimination gate. Free-form behavior recovery was 0/24.
 5.  **Cross-receiver transfer requires more than linear bridges:** A lightweight linear bridge from 0.8B to 2B failed to preserve the known semantic control. Packets are currently receiver-specific; a Shared Latent Hub will need validated receiver-specific adapters or alignment mechanisms, not just dimensional matching.
 
-> **Revised Geometric Interpretation:** Identifiers do not "physically never reach the decoder." They reach it as a weak, high-dimensional signal that the current readout cannot reliably amplify above the noise floor of lexical priors. The sidecar is architecturally necessary because continuous interpolation fundamentally struggles with discrete symbol recovery at this scale.
+> **Revised geometric interpretation:** Identifier edits occupy a weak direction in the packet (linear probe: 44.8% vs 12.5% chance; candidate-free logit lift +0.02..+0.05), but the receiver's pretrained lexical priors dominate at generation time — open-vocabulary recovery is 0/96. The sidecar is **operationally necessary for this model pair**; architectural necessity is not established.
+
+### Ladder of evidence: which claim stands on which rung
+
+Four levels of evidence, weakest to strongest. Every README claim must sit on its highest *earned* rung:
+
+1. **Global similarity** — does the packet move at all when the input changes? (cosine distances)
+2. **Decodability** — can the information be *extracted* from the packet? (linear probe)
+3. **Distribution response** — does the receiver's probability distribution shift in the intended direction? (candidate-free likelihood lifts)
+4. **Reliable generation** — does the receiver *produce* the correct answer at inference time? (exact-match accuracy)
+
+| Claim in this README | Rung | Evidence |
+|---|---|---|
+| The packet is not a generic soft prompt; it carries sample-specific semantics | 1–2 | cos 0.985 (renamed vs other fn 0.930); SemSim gap +0.261 [0.168, 0.382] |
+| Identifier edits change the packet | 1 | cos(original, renamed) = 0.985–0.987, i.e. only a small shift |
+| Identifier info is decodable from the packet | 2 | linear probe 44.8% vs 12.5% chance; the last latent position alone reaches 0.59 |
+| The receiver's distribution responds weakly to identifier edits | 3 | self-score lift +0.02..+0.05 (0.024 / 0.052 across prompt types) |
+| Pure latents recover exact symbols at generation time | 4 — **fails** | names 0.00; open-vocabulary 0/96; top-1 13.5% ≈ 12.5% chance |
+| The sidecar restores exact symbols at generation time | 4 — passes | names 0.87, params 0.93 (vs 0.00 / 0.13 pure latents) |
+| Sidecar is **operationally** necessary for this model pair | 4 | direct consequence of the rung-4 failure above |
+| Sidecar is **architecturally** necessary (any model pair) | **not claimed** | not established — the weak rung-2/3 signal might amplify with scale or explicit readout training |
 
 ### Benchmark plots
 
@@ -129,6 +152,7 @@ qxern/
 ├── README.ru.md                     # Russian version
 ├── Qxern_v6_hybrid_sidecar.ipynb    # the whole pipeline: cells 1–10 = v5, 11–17 = v6
 ├── assets/                          # benchmark plots (linked above)
+├── independent_audit/               # external audit (John6666): 3 public Colab notebooks + README
 └── results/
     ├── qxern_v6_results.json        # all raw benchmark numbers (per-example)
     └── teacher_answers.json         # cached teacher generations

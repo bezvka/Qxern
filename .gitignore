@@ -1,2 +1,6 @@
 deploy_int4/
+deploy_int4_hf/
+demo_gen/
+space_qxern_v6_demo/
+paper_ref.css
 *.pt
